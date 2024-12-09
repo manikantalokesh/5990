@@ -1,0 +1,129 @@
+https://www.kaggle.com/datasets/virajbagal/roco-dataset/data
+
+
+
+to categeorize all the files: 
+
+~/Images/<bodypart>/<images>
+
+
+import os
+import shutil
+import pandas as pd
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Function to categorize captions with expanded synonyms
+def categorize(caption):
+    caption = str(caption).lower()
+    if any(keyword in caption for keyword in [
+        "chest", "lung", "thorax", "heart", "rib", "sternum", "thoracic", "pleura",
+        "pulmonary", "diaphragm", "mediastinum", "bronchial", "trachea"
+    ]):
+        return "Chest"
+    elif any(keyword in caption for keyword in [
+        "bone", "fracture", "broken", "skeletal", "spine", "joint", "vertebra", "pelvis",
+        "collarbone", "clavicle", "radius", "ulna", "tibia", "fibula", "femur", "patella", "humerus", "scapula"
+    ]):
+        return "Broken_Bone"
+    elif any(keyword in caption for keyword in [
+        "mri", "magnetic", "scan", "imaging", "radiology", "cross-sectional",
+        "neuroimaging", "functional", "contrast", "axial", "sagittal", "coronal", "diffusion", "spectroscopy"
+    ]):
+        return "MRI"
+    elif any(keyword in caption for keyword in [
+        "abdomen", "stomach", "liver", "intestine", "pancreas", "kidney", "spleen",
+        "colon", "rectum", "duodenum", "gallbladder", "bladder", "ureter", "urethra", "appendix", "esophagus"
+    ]):
+        return "Abdomen"
+    else:
+        return "Other"
+
+# Function to process a single row (image categorization and organization)
+def process_row(row, images_dir, output_base_path, subcategory_data):
+    image_id = row['id']
+    caption = row['caption']
+    category = row['category']
+
+    # Find the image file based on ID
+    src_image_path = None
+    for filename in os.listdir(images_dir):
+        if image_id.lower() == os.path.splitext(filename.lower())[0]:
+            src_image_path = os.path.join(images_dir, filename)
+            break
+
+    if src_image_path is None:
+        print(f"Image with ID {image_id} not found in {images_dir}. Skipping.")
+        return
+
+    # Destination folder with images subfolder
+    dest_folder = Path(output_base_path) / category / "images"
+    dest_folder.mkdir(parents=True, exist_ok=True)
+
+
+    # Destination image path
+    dest_image_path = dest_folder / os.path.basename(src_image_path)
+
+    # Save image details in subcategory_data
+    if category not in subcategory_data:
+        subcategory_data[category] = []
+    subcategory_data[category].append({'image_id': image_id, 'caption': caption, 'body_part': category})
+
+    # Move or copy the image
+    try:
+        shutil.copy(src_image_path, dest_image_path)
+    except FileNotFoundError:
+        print(f"Image {src_image_path} not found in {images_dir}. Skipping.")
+
+# Main categorization function
+def categorize_images_by_id_parallel(csv_path, images_dir, output_base_path, max_workers=8):
+    print(f"Resolved path to CSV: {csv_path}")
+
+    # Read the CSV file
+    data_df = pd.read_csv(csv_path)
+
+    # Apply categorization
+    data_df['category'] = data_df['caption'].apply(categorize)
+
+    # Save or append the updated categorized CSV file
+    output_csv_path = os.path.join(os.path.dirname(csv_path), "categorized_data.csv")
+    if os.path.exists(output_csv_path):
+        data_df.to_csv(output_csv_path, mode='a', index=False, header=False)
+    else:
+        data_df.to_csv(output_csv_path, index=False)
+    print(f"Categorized CSV updated at: {output_csv_path}")
+
+    # Dictionary to hold data for each subcategory
+    subcategory_data = {}
+
+    # Parallel processing using ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for _, row in data_df.iterrows():
+            futures.append(executor.submit(process_row, row, images_dir, output_base_path, subcategory_data))
+
+        # Wait for all tasks to complete
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Error processing row: {e}")
+
+    # Save or append subcategory CSV files
+    for category, rows in subcategory_data.items():
+        subcategory_csv_path = Path(output_base_path) / category / f"{category}_data.csv"
+        if subcategory_csv_path.exists():
+            pd.DataFrame(rows).to_csv(subcategory_csv_path, mode='a', index=False, header=False)
+        else:
+            pd.DataFrame(rows).to_csv(subcategory_csv_path, index=False)
+        print(f"CSV updated for {category} at: {subcategory_csv_path}")
+
+    print(f"Images categorized and saved at: {output_base_path}")
+
+# Example usage for the train dataset
+train_csv_path = "/home/ubuntu/FinalProject/all_data/train/radiologytraindata.csv"
+train_images_dir = "/home/ubuntu/FinalProject/all_data/train/radiology/images"
+output_base_path = "/home/ubuntu/FinalProject/Images"
+
+# Execute categorization and processing
+categorize_images_by_id_parallel(train_csv_path, train_images_dir, output_base_path)
